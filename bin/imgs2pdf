@@ -1,0 +1,105 @@
+#!/usr/bin/env ruby
+#### imgs2pdf ---                                             -*- mode: ruby; -*-
+
+## Copyright (C) 2024  damienpichard
+
+## Author: damienpichard <damienpichard@tutanota.de>
+
+## This program is free software; you can redistribute it and/or modify
+## it under the terms of the GNU General Public License as published by
+## the Free Software Foundation, either version 3 of the License, or
+## (at your option) any later version.
+
+## This program is distributed in the hope that it will be useful,
+## but WITHOUT ANY WARRANTY; without even the implied warranty of
+## MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+## GNU General Public License for more details.
+
+## You should have received a copy of the GNU General Public License
+## along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+### Code:
+
+require 'optparse'
+require 'fileutils'
+
+require 'combine_pdf'
+require 'ruby-progressbar'
+
+require_relative '../lib/String+Extension'
+require_relative '../lib/File+Extension'
+require_relative '../lib/Cli'
+
+module Elves
+  class Imgs2Pdf < Cli
+    def initialize
+      super
+      @input_exts    = ['.jpg', '.jpeg', '.png', '.webp']
+      @output_exts   = ['.pdf']
+    end
+
+    def parse!
+      OptionParser.new do |parser|
+        parser.banner = "Usage: #{@program_name} [options] <output>"
+        parser.on('-c', '--compress', 'Compress resulting file')        { |compress| @compress = compress }
+        parser.on('-k', '--keep',     'Keep intermediary files')        { |keep|     @keep     = keep     }
+        parser.on('-v', '--verbose',  'Make operations more talkative') { |verbose|  @verbose  = verbose  }
+        parser.on('-h', '--help',     'Prints this help')               {            puts parser; exit    }
+      end.parse!
+
+      # Last argument should be the output filename.
+      @output     = ARGV.shift || 'output.pdf'
+      # Output filepath in temporary directory.
+      @tmp_output = File.expand_path("#{@tmp_directory}/#{@output}")
+    end
+
+    def convert
+      files    = File.find(Dir.pwd, exts: @input_exts)
+      progress = ProgressBar.create(title: 'converting', total: files.count, format: '%t: [%B %c/%u]')
+
+      files.sort.each do |file|
+        if File.which('img2pdf')
+          filepath = File.expand_path("#{@tmp_directory}/#{file}.pdf")
+          system "img2pdf \"#{file}\" -o \"#{filepath}\""
+          progress.increment if @verbose
+        else
+          warn "#{@program_name}: executable 'img2pdf' not found..."
+          exit(1)
+        end
+      end
+    end
+
+    def merge
+      pdf      = CombinePDF.new
+      files    = File.find(@tmp_directory, exts: ['.pdf'])
+      progress = ProgressBar.create(title: 'merging', total: files.count, format: '%t: [%B %c/%u]')
+
+      files.sort.each do |file|
+        pdf << CombinePDF.load(File.expand_path("#{@tmp_directory}/#{file}"))
+        progress.increment if @verbose
+      end
+
+      pdf.save(@tmp_output)
+    end
+
+    def compress
+      if @compress
+        progress = ProgressBar.create(title: 'compressing', total: 1, format: '%t: [%B %c/%u]')
+
+        system "gs -sDEVICE=pdfwrite -dNOPAUSE -dQUIET -dBATCH -dPDFSETTINGS=/printer -dCompatibilityLevel=1.7 -sOutputFile=\"#{@output}\" \"#{@tmp_output}\" 2>/dev/null"
+        progress.increment if @verbose
+      else
+        path = File.expand_path("#{@tmp_directory}/#{@output}")
+        FileUtils.mv(path.to_s, @output.to_s)
+      end
+    end
+  end
+end
+
+imgs2pdf = Elves::Imgs2Pdf.new
+imgs2pdf.parse!
+imgs2pdf.mktmp
+imgs2pdf.convert
+imgs2pdf.merge
+imgs2pdf.compress
+imgs2pdf.finalize(!@keep)
